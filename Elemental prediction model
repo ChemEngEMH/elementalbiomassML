@@ -1,1 +1,69 @@
+import numpy as np
+import pandas as pd
+import joblib
+import os
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
+RUTA = r"G:()"
+
+@tf.keras.utils.register_keras_serializable(package='Custom')
+class GlobalR2Metric(tf.keras.metrics.Metric):
+    def __init__(self, n_outputs=5, name='global_r2', **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.n_outputs  = n_outputs
+        self.sum_sq_res = self.add_weight('ssr', shape=(n_outputs,), initializer='zeros')
+        self.sum_y      = self.add_weight('sy',  shape=(n_outputs,), initializer='zeros')
+        self.sum_y_sq   = self.add_weight('sy2', shape=(n_outputs,), initializer='zeros')
+        self.count      = self.add_weight('n',   initializer='zeros')
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = tf.cast(y_true, tf.float32); y_pred = tf.cast(y_pred, tf.float32)
+        self.sum_sq_res.assign_add(tf.reduce_sum(tf.square(y_true - y_pred), axis=0))
+        self.sum_y.assign_add(tf.reduce_sum(y_true, axis=0))
+        self.sum_y_sq.assign_add(tf.reduce_sum(tf.square(y_true), axis=0))
+        self.count.assign_add(tf.cast(tf.shape(y_true)[0], tf.float32))
+    def result(self):
+        mu = self.sum_y / (self.count + 1e-8)
+        ss = self.sum_y_sq - self.count * tf.square(mu)
+        return tf.reduce_mean(1.0 - self.sum_sq_res / (ss + 1e-8))
+    def reset_state(self):
+        for w in [self.sum_sq_res, self.sum_y, self.sum_y_sq]: w.assign(tf.zeros_like(w))
+        self.count.assign(0.0)
+    def get_config(self):
+        c = super().get_config(); c.update({'n_outputs': self.n_outputs}); return c
+    @classmethod
+    def from_config(cls, cfg): return cls(**cfg)
+
+clf      = joblib.load(os.path.join(RUTA, 'modelo_final.pkl'))
+modelo   = load_model(os.path.join(RUTA, 'model.keras'), compile=False,
+                      custom_objects={'GlobalR2Metric': GlobalR2Metric})
+modelo.compile(optimizer='adam', loss='mse')
+X_scaler = joblib.load(os.path.join(RUTA, 'scaler_X.pkl'))
+y_scaler = joblib.load(os.path.join(RUTA, 'scalers_y.pkl'))
+encoder  = joblib.load(os.path.join(RUTA, 'encoder_cluster.pkl'))
+
+COLS     = ['AR_Moisturecontent','AR_Ashcontent','AR_Volatilematter',
+            'AR_Fixedcarbon','AR_Netcalorificvalue(LHV)']
+OUT_KEYS = ['AR_Carbon','AR_Hydrogen','AR_Nitrogen','AR_Sulphur','AR_Oxygen']
+OUT_NAMES= ['C','H','N','S','O']
+OUT_DISP = {'AR_Carbon':'C (%)','AR_Hydrogen':'H (%)','AR_Nitrogen':'N (%)',
+            'AR_Sulphur':'S (%)','AR_Oxygen':'O (%)'}
+
+def predecir(df_in):
+    df       = df_in[COLS].copy().reset_index(drop=True)
+    df['cluster'] = clf.predict(df[COLS].values)
+    num_cols = list(X_scaler.feature_names_in_)
+    Xn = X_scaler.transform(df[num_cols].astype(float))
+    Xc = encoder.transform(df[['cluster']])
+    Xf = np.hstack([Xn, Xc]).astype(np.float32)
+    yp = modelo.predict(Xf, verbose=0)
+    for i, col in enumerate(OUT_NAMES):
+        df[OUT_DISP[OUT_KEYS[i]]] = y_scaler[col].inverse_transform(yp[:,[i]]).ravel()
+    df.index = [f"M{i+1}" for i in range(len(df))]
+    return df[['cluster'] + list(OUT_DISP.values())].rename(columns={'cluster':'Cluster'})
+
+datos = [
+    [...],
+]
+df = pd.DataFrame(datos, columns=COLS)
+predecir(df)
