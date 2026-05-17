@@ -1,4 +1,7 @@
 # elementalbiomassML
+#NEW: For testing the model visit: https://sinday56-predictor-biomass.hf.space/
+
+
 Model for biomass classification and prediction of elemental analysis
 1. Make sure you have the proximate analysis data and the calorific value of the biomass samples to be classified and predicted.
 2. Load the Excel file into the logistic regression code for the proximate analysis to classify each biomass sample into group 0, 1, 2, or 3.
